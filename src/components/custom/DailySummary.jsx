@@ -1,23 +1,32 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { addDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, setDoc, doc, Timestamp } from 'firebase/firestore';
 import { db } from '@/service/firebaseConfig';
 import { Button } from '../ui/button';
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { IoIosRefresh } from "react-icons/io";
+import { RiFahrenheitFill, RiCelsiusLine } from "react-icons/ri";
 
 function DailySummary({ city }) {
   const [dailySummary, setDailySummary] = useState(null);
   const [intervalMinutes, setIntervalMinutes] = useState(5); // Default to 5 minutes
   const [intervalId, setIntervalId] = useState(null);
+  const [isCelsius, setIsCelsius] = useState(true);
   const apiKey = import.meta.env.VITE_OPEN_WEATHER_MAP_API_KEY;
+
+  // Function to convert Celsius to Fahrenheit
+  const convertToFahrenheit = (celsius) => (celsius * 9/5) + 32;
+
+  // Toggle temperature unit
+  const toggleTemperatureUnit = () => {
+    setIsCelsius(!isCelsius);
+  };
 
   // Function to fetch weather data
   const fetchWeatherData = async () => {
@@ -31,85 +40,100 @@ function DailySummary({ city }) {
       const weather = {
         temp: data.main.temp - 273.15, // Convert Kelvin to Celsius
         main: data.weather[0].main,
-        feels_like: data.main.feels_like - 273.15,
-        dt: Timestamp.fromDate(new Date()), // Store the timestamp
+        dt: new Date(),
       };
 
-      await saveDataToFirebase(weather); // Save the data
-      await fetchDailySummaryFromFirebase(); // Fetch the summary from Firebase after saving
+      await updateDailyAverageInFirebase(weather); // Save or update the daily average
+      await fetchDailySummaryFromFirebase(); // Fetch the updated summary from Firebase
     } catch (error) {
       console.error('Error fetching weather data:', error);
     }
   };
 
-  // Function to store weather data in Firebase
-  const saveDataToFirebase = async (data) => {
+  // Function to update the daily average data in Firebase
+  const updateDailyAverageInFirebase = async (data) => {
     try {
-      const weatherCollection = collection(db, 'WeatherDetails');
-      const currentTime = new Date();
-      const fiveMinutesAgo = new Date(currentTime.getTime() - 5 * 60 * 1000); // Check for entries in the last 5 minutes
-  
+      const weatherCollection = collection(db, 'DailyWeatherSummary');
+      const today = new Date();
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0)); // Start of the current day
+
       const q = query(
         weatherCollection,
         where('city', '==', city),
-        where('dt', '>=', Timestamp.fromDate(fiveMinutesAgo))
+        where('date', '>=', Timestamp.fromDate(startOfDay)) // Look for today's entry
       );
       const querySnapshot = await getDocs(q);
-  
-      if (querySnapshot.empty) {
-        // Only save data if there's no existing data from the last 5 minutes
-        await addDoc(weatherCollection, { ...data, city });
-        console.log('Data saved to Firebase:', data);
+
+      let dailyDocRef;
+      let dailyData;
+
+      if (!querySnapshot.empty) {
+        // Update existing entry for today
+        querySnapshot.forEach((doc) => {
+          dailyDocRef = doc.ref;
+          dailyData = doc.data();
+        });
       } else {
-        console.log('Duplicate data detected, skipping save.');
+        // Create a new entry for today
+        dailyDocRef = doc(weatherCollection);
+        dailyData = {
+          city,
+          date: Timestamp.fromDate(startOfDay),
+          tempSum: 0,
+          tempCount: 0,
+          tempMin: Infinity,
+          tempMax: -Infinity,
+          weatherConditions: {},
+        };
       }
+
+      // Update the daily data
+      dailyData.tempSum += data.temp;
+      dailyData.tempCount += 1;
+      dailyData.tempMin = Math.min(dailyData.tempMin, data.temp);
+      dailyData.tempMax = Math.max(dailyData.tempMax, data.temp);
+
+      // Update weather conditions count
+      if (dailyData.weatherConditions[data.main]) {
+        dailyData.weatherConditions[data.main]++;
+      } else {
+        dailyData.weatherConditions[data.main] = 1;
+      }
+
+      // Save the updated data to Firebase
+      await setDoc(dailyDocRef, dailyData);
+      console.log('Daily average updated in Firebase:', dailyData);
     } catch (error) {
-      console.error('Error saving weather data to Firebase:', error);
+      console.error('Error updating daily average in Firebase:', error);
     }
   };
 
-  // Function to fetch weather data from Firebase and calculate the daily summary
+  // Function to fetch the daily summary from Firebase
   const fetchDailySummaryFromFirebase = async () => {
     try {
       const today = new Date();
-      const startOfDay = new Date(today.setHours(0, 0, 0, 0)); // Start of current day
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0)); // Start of the current day
       const q = query(
-        collection(db, 'WeatherDetails'),
+        collection(db, 'DailyWeatherSummary'),
         where('city', '==', city),
-        where('dt', '>=', Timestamp.fromDate(startOfDay)) // Get data only from today
+        where('date', '>=', Timestamp.fromDate(startOfDay)) // Get data only from today
       );
       const querySnapshot = await getDocs(q);
 
-      let tempSum = 0;
-      let tempMin = Infinity;
-      let tempMax = -Infinity;
-      const weatherConditions = {};
+      if (!querySnapshot.empty) {
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
 
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        tempSum += data.temp;
-        if (data.temp < tempMin) tempMin = data.temp;
-        if (data.temp > tempMax) tempMax = data.temp;
+          const dominantCondition = Object.keys(data.weatherConditions).reduce((a, b) =>
+            data.weatherConditions[a] > data.weatherConditions[b] ? a : b
+          );
 
-        // Count weather conditions
-        if (weatherConditions[data.main]) {
-          weatherConditions[data.main]++;
-        } else {
-          weatherConditions[data.main] = 1;
-        }
-      });
-
-      const count = querySnapshot.size;
-      if (count > 0) {
-        const dominantCondition = Object.keys(weatherConditions).reduce((a, b) =>
-          weatherConditions[a] > weatherConditions[b] ? a : b
-        );
-
-        setDailySummary({
-          averageTemp: tempSum / count,
-          maxTemp: tempMax,
-          minTemp: tempMin,
-          dominantCondition,
+          setDailySummary({
+            averageTemp: data.tempSum / data.tempCount,
+            maxTemp: data.tempMax,
+            minTemp: data.tempMin,
+            dominantCondition,
+          });
         });
       } else {
         setDailySummary(null); // No data to show
@@ -148,7 +172,12 @@ function DailySummary({ city }) {
     <Card className="daily-summary relative p-5 shadow-lg rounded-lg">
       {/* Header */}
       <CardHeader className="mb-4">
-        <CardTitle className="text-xl font-semibold">Daily Weather Summary for {city}</CardTitle>
+        <CardTitle className="text-xl font-semibold">
+          Daily Weather Summary for {city} &nbsp;&nbsp;
+          <Button size="sm" onClick={toggleTemperatureUnit}>
+            {isCelsius ? <RiCelsiusLine /> : <RiFahrenheitFill />}
+          </Button>
+        </CardTitle>
       </CardHeader>
 
       {/* Interval configuration, positioned at top right */}
@@ -168,9 +197,15 @@ function DailySummary({ city }) {
       <CardContent>
         {dailySummary ? (
           <div className="space-y-2">
-            <p className="text-lg">Average Temp: {dailySummary.averageTemp.toFixed(2)}°C</p>
-            <p className="text-lg">Max Temp: {dailySummary.maxTemp.toFixed(2)}°C</p>
-            <p className="text-lg">Min Temp: {dailySummary.minTemp.toFixed(2)}°C</p>
+            <p className="text-lg">
+              Average Temp: {isCelsius ? dailySummary.averageTemp.toFixed(2) : convertToFahrenheit(dailySummary.averageTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'}
+            </p>
+            <p className="text-lg">
+              Max Temp: {isCelsius ? dailySummary.maxTemp.toFixed(2) : convertToFahrenheit(dailySummary.maxTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'}
+            </p>
+            <p className="text-lg">
+              Min Temp: {isCelsius ? dailySummary.minTemp.toFixed(2) : convertToFahrenheit(dailySummary.minTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'}
+            </p>
             <p className="text-lg">Dominant Condition: {dailySummary.dominantCondition}</p>
           </div>
         ) : (
@@ -181,10 +216,10 @@ function DailySummary({ city }) {
       {/* Footer with Last Updated */}
       <CardFooter className="flex justify-between items-center">
         <p className="text-sm text-gray-400">Last updated: {new Date().toLocaleTimeString()}</p>
-        
+
         {/* Refresh icon at bottom right */}
         <IoIosRefresh
-          className="text-xl cursor-pointer text-blue-600 hover:text-blue-800"
+          className="text-xl cursor-pointer text-gray-600 hover:text-gray-800"
           onClick={fetchWeatherData}
         />
       </CardFooter>
