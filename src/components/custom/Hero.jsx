@@ -2,6 +2,7 @@ import React from 'react'
 import { Button } from '../ui/button'
 import DailySummary from './DailySummary';
 import Footer from './Footer';
+import { Toaster } from 'sonner';
 
 function Hero() {
     const cities = ['Delhi', 'Mumbai', 'Chennai', 'Bangalore', 'Kolkata', 'Hyderabad'];
@@ -16,6 +17,7 @@ function Hero() {
         <DailySummary key={index} city={city} />
       ))}
       
+      <Toaster />
       <Footer/>
     </div>
   )

@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { collection, query, where, getDocs, setDoc, doc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, setDoc, doc, Timestamp, getDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '@/service/firebaseConfig';
-import { Button } from '../ui/button';
 import {
   Card,
   CardContent,
@@ -12,12 +11,52 @@ import {
 } from "@/components/ui/card";
 import { IoIosRefresh } from "react-icons/io";
 import { RiFahrenheitFill, RiCelsiusLine } from "react-icons/ri";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+} from "@/components/ui/form";
+import WeatherAlertForm from './Form';
 
 function DailySummary({ city }) {
   const [dailySummary, setDailySummary] = useState(null);
   const [intervalMinutes, setIntervalMinutes] = useState(5); // Default to 5 minutes
   const [intervalId, setIntervalId] = useState(null);
   const [isCelsius, setIsCelsius] = useState(true);
+  const [email, setEmail] = useState('');
+  const [isAlertModalOpen, setAlertModalOpen] = useState(false);
+
+  const defaultAlertSettings = {
+    maxTemp: false,
+    minTemp: false,
+    rain: false,
+    snow: false,
+    storm: false,
+  };
+  
+  const [alertSettings, setAlertSettings] = useState({
+    maxTemp: false,
+    minTemp: false,
+    rain: false,
+    snow: false,
+    storm: false,
+  });
   const apiKey = import.meta.env.VITE_OPEN_WEATHER_MAP_API_KEY;
 
   // Function to convert Celsius to Fahrenheit
@@ -27,6 +66,57 @@ function DailySummary({ city }) {
   const toggleTemperatureUnit = () => {
     setIsCelsius(!isCelsius);
   };
+
+  const onSave = async (data) => {
+    try {
+      // Log the incoming data for debugging
+      console.log('Form data:', data);
+
+      // Ensure the email is present in the form data
+      const userEmail = data.email;
+      if (!userEmail) {
+        throw new Error('Email is required to save alert settings.');
+      }
+
+      // Set alert settings based on form data
+      setAlertSettings({
+        maxTemp: data.maxTemp,
+        minTemp: data.minTemp,
+        rain: data.rain,
+        snow: data.snow,
+        storm: data.storm,
+      });
+
+      // List of alerts
+      const alerts = [
+        { condition: data.maxTemp, collection: 'MaxTempAlert' },
+        { condition: data.minTemp, collection: 'MinTempAlert' },
+        { condition: data.rain, collection: 'RainAlert' },
+        { condition: data.snow, collection: 'SnowAlert' },
+        { condition: data.storm, collection: 'StormAlert' }
+      ];
+
+      // Check each alert setting
+      for (const alert of alerts) {
+        const alertCollectionRef = collection(db, alert.collection);
+        const alertDocRef = doc(alertCollectionRef, userEmail);
+
+        if (alert.condition) {
+          // If the condition is true, add the email to the corresponding collection
+          await setDoc(alertDocRef, { email: userEmail });
+        } else {
+          // If the condition is false, remove the email from the collection
+          await deleteDoc(alertDocRef);
+        }
+      }
+
+      // Close the modal after saving
+      setAlertModalOpen(false);
+      console.log('Alert settings saved for', userEmail);
+    } catch (error) {
+      console.error('Error saving alert settings:', error);
+    }
+};
 
   // Function to fetch weather data
   const fetchWeatherData = async () => {
@@ -45,6 +135,8 @@ function DailySummary({ city }) {
 
       await updateDailyAverageInFirebase(weather); // Save or update the daily average
       await fetchDailySummaryFromFirebase(); // Fetch the updated summary from Firebase
+      
+      // checkAlerts(weather);
     } catch (error) {
       console.error('Error fetching weather data:', error);
     }
@@ -155,6 +247,85 @@ function DailySummary({ city }) {
     const id = setInterval(fetchWeatherData, intervalMinutes * 60 * 1000); // Convert minutes to ms
     setIntervalId(id);
   };
+  const alertCounters = {
+    maxTemp: 0,
+    minTemp: 0,
+    rain: 0,
+    snow: 0,
+    storm: 0,
+};
+
+const checkAlerts = async (weather) => {
+    try {
+        const temp = weather.temp;
+        const mainCondition = weather.main;
+
+        // Helper function to send alerts for specific conditions
+        const sendAlertsForCondition = async (condition, collectionName) => {
+            if (alertCounters[condition] >= 3) {
+                // Get all users in the corresponding collection
+                const collectionRef = collection(db, collectionName);
+                const snapshot = await getDocs(collectionRef);
+
+                snapshot.forEach((doc) => {
+                    const userEmail = doc.data().email;
+                    sendEmailAlert(userEmail, `Weather Alert for ${city}`, `Threshold breached for ${condition}!`);
+                });
+
+                // Reset the alert counter after sending emails
+                alertCounters[condition] = 0;
+            }
+        };
+
+        // Check temperature thresholds
+        if (temp > 35) {
+            alertCounters.maxTemp++;
+        } else {
+            alertCounters.maxTemp = 0;
+        }
+
+        if (temp < 5) {
+            alertCounters.minTemp++;
+        } else {
+            alertCounters.minTemp = 0;
+        }
+
+        // Check specific weather conditions
+        if (mainCondition === 'Rain') {
+            alertCounters.rain++;
+        } else {
+            alertCounters.rain = 0;
+        }
+
+        if (mainCondition === 'Snow') {
+            alertCounters.snow++;
+        } else {
+            alertCounters.snow = 0;
+        }
+
+        if (mainCondition === 'Storm') {
+            alertCounters.storm++;
+        } else {
+            alertCounters.storm = 0;
+        }
+
+        // Check and send alerts if any condition is triggered 3 times consecutively
+        await sendAlertsForCondition('maxTemp', 'MaxTempAlert');
+        await sendAlertsForCondition('minTemp', 'MinTempAlert');
+        await sendAlertsForCondition('rain', 'RainAlert');
+        await sendAlertsForCondition('snow', 'SnowAlert');
+        await sendAlertsForCondition('storm', 'StormAlert');
+    } catch (error) {
+        console.error('Error checking alerts:', error);
+    }
+};
+
+  // Send email alert (mock function)
+  const sendEmailAlert = (email, subject, message) => {
+      console.log(`Sending email to ${email} with subject: ${subject} and message: ${message}`);
+      // Email sending logic would go here
+  };
+
 
   useEffect(() => {
     // Start fetching data on component mount and set interval
@@ -169,7 +340,7 @@ function DailySummary({ city }) {
   }, [intervalMinutes, city]);
 
   return (
-    <Card className="daily-summary relative p-5 shadow-lg rounded-lg">
+    <Card className="daily-summary relative p-4 shadow-lg rounded-lg">
       {/* Header */}
       <CardHeader className="mb-4">
         <CardTitle className="text-xl font-semibold">
@@ -191,7 +362,11 @@ function DailySummary({ city }) {
           onChange={(e) => setIntervalMinutes(Number(e.target.value))}
         />
         <Button size="sm" onClick={startDataFetchInterval}>Update</Button>
+        
+        <Button onClick={() => setAlertModalOpen(true)}>Configure Alerts</Button>
       </div>
+      
+      
 
       {/* Card content */}
       <CardContent>
@@ -223,6 +398,23 @@ function DailySummary({ city }) {
           onClick={fetchWeatherData}
         />
       </CardFooter>
+      
+      {isAlertModalOpen && (
+        <Dialog open={isAlertModalOpen} onOpenChange={setAlertModalOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Set Weather Alerts</DialogTitle>
+              <DialogDescription>
+                Configure your weather alerts below.
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Pass default values and the save function as props */}
+            <WeatherAlertForm defaultValues={defaultAlertSettings} onSave={onSave} />
+          </DialogContent>
+        </Dialog>
+      )}
+
     </Card>
   );
 }
