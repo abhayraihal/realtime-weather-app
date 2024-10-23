@@ -69,7 +69,7 @@ function DailySummary({ city }) {
 
   const onSave = async (data) => {
     try {
-        console.log('Form data:', data);
+        // console.log('Form data:', data);
 
         const userEmail = data.email;
         const userCity = city;
@@ -106,7 +106,7 @@ function DailySummary({ city }) {
         }
 
         setAlertModalOpen(false);
-        console.log('Alert settings saved for', userEmail);
+        // console.log('Alert settings saved for', userEmail);
     } catch (error) {
         console.error('Error saving alert settings:', error);
     }
@@ -120,7 +120,7 @@ function DailySummary({ city }) {
         `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${apiKey}`
       );
       const data = response.data;
-      console.log("Fetched weather data:", data);
+      // console.log("Fetched weather data:", data);
 
       const weather = {
         temp: data.main.temp - 273.15, // Convert Kelvin to Celsius
@@ -189,7 +189,7 @@ function DailySummary({ city }) {
 
       // Save the updated data to Firebase
       await setDoc(dailyDocRef, dailyData);
-      console.log('Daily average updated in Firebase:', dailyData);
+      // console.log('Daily average updated in Firebase:', dailyData);
     } catch (error) {
       console.error('Error updating daily average in Firebase:', error);
     }
@@ -252,7 +252,7 @@ function DailySummary({ city }) {
   
   const checkAlerts = async (weather) => {
     try {
-        console.log(weather);
+        // console.log(weather);
         const temp = weather.temp;
         const mainCondition = weather.main;
 
@@ -275,7 +275,7 @@ function DailySummary({ city }) {
             }
         };
 
-        console.log(alertCounters);
+        // console.log(alertCounters);
 
         setalertCounters((prevCounters) => {
             const newCounters = { ...prevCounters };
