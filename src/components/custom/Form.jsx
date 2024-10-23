@@ -12,7 +12,6 @@ import {
   FormItem,
   FormLabel,
 } from "@/components/ui/form";
-import 'react-toastify/dist/ReactToastify.css';
 import { toast } from 'sonner';
 
 // Form schema using Zod
