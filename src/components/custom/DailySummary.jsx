@@ -69,54 +69,49 @@ function DailySummary({ city }) {
 
   const onSave = async (data) => {
     try {
-      // Log the incoming data for debugging
-      console.log('Form data:', data);
+        console.log('Form data:', data);
 
-      // Ensure the email is present in the form data
-      const userEmail = data.email;
-      if (!userEmail) {
-        throw new Error('Email is required to save alert settings.');
-      }
+        const userEmail = data.email;
+        const userCity = city;
 
-      // Set alert settings based on form data
-      setAlertSettings({
-        maxTemp: data.maxTemp,
-        minTemp: data.minTemp,
-        rain: data.rain,
-        snow: data.snow,
-        storm: data.storm,
-      });
-
-      // List of alerts
-      const alerts = [
-        { condition: data.maxTemp, collection: 'MaxTempAlert' },
-        { condition: data.minTemp, collection: 'MinTempAlert' },
-        { condition: data.rain, collection: 'RainAlert' },
-        { condition: data.snow, collection: 'SnowAlert' },
-        { condition: data.storm, collection: 'StormAlert' }
-      ];
-
-      // Check each alert setting
-      for (const alert of alerts) {
-        const alertCollectionRef = collection(db, alert.collection);
-        const alertDocRef = doc(alertCollectionRef, userEmail);
-
-        if (alert.condition) {
-          // If the condition is true, add the email to the corresponding collection
-          await setDoc(alertDocRef, { email: userEmail });
-        } else {
-          // If the condition is false, remove the email from the collection
-          await deleteDoc(alertDocRef);
+        if (!userEmail) {
+            throw new Error('Email is required to save alert settings.');
         }
-      }
 
-      // Close the modal after saving
-      setAlertModalOpen(false);
-      console.log('Alert settings saved for', userEmail);
+        setAlertSettings({
+            maxTemp: data.maxTemp,
+            minTemp: data.minTemp,
+            rain: data.rain,
+            snow: data.snow,
+            storm: data.storm,
+        });
+
+        const alerts = [
+            { condition: data.maxTemp, collection: 'MaxTempAlert' },
+            { condition: data.minTemp, collection: 'MinTempAlert' },
+            { condition: data.rain, collection: 'RainAlert' },
+            { condition: data.snow, collection: 'SnowAlert' },
+            { condition: data.storm, collection: 'StormAlert' }
+        ];
+
+        for (const alert of alerts) {
+            const alertCollectionRef = collection(db, alert.collection);
+            const alertDocRef = doc(alertCollectionRef, userEmail);
+
+            if (alert.condition) {
+                await setDoc(alertDocRef, { email: userEmail, city: userCity }); // Save city with email
+            } else {
+                await deleteDoc(alertDocRef);
+            }
+        }
+
+        setAlertModalOpen(false);
+        console.log('Alert settings saved for', userEmail);
     } catch (error) {
-      console.error('Error saving alert settings:', error);
+        console.error('Error saving alert settings:', error);
     }
 };
+
 
   // Function to fetch weather data
   const fetchWeatherData = async () => {
@@ -136,7 +131,7 @@ function DailySummary({ city }) {
       await updateDailyAverageInFirebase(weather); // Save or update the daily average
       await fetchDailySummaryFromFirebase(); // Fetch the updated summary from Firebase
       
-      // checkAlerts(weather);
+      checkAlerts(weather);
     } catch (error) {
       console.error('Error fetching weather data:', error);
     }
@@ -247,69 +242,77 @@ function DailySummary({ city }) {
     const id = setInterval(fetchWeatherData, intervalMinutes * 60 * 1000); // Convert minutes to ms
     setIntervalId(id);
   };
-  const alertCounters = {
+  const [alertCounters, setalertCounters] = useState({
     maxTemp: 0,
     minTemp: 0,
     rain: 0,
     snow: 0,
     storm: 0,
-};
-
-const checkAlerts = async (weather) => {
+  });
+  
+  const checkAlerts = async (weather) => {
     try {
+        console.log(weather);
         const temp = weather.temp;
         const mainCondition = weather.main;
 
-        // Helper function to send alerts for specific conditions
         const sendAlertsForCondition = async (condition, collectionName) => {
             if (alertCounters[condition] >= 3) {
-                // Get all users in the corresponding collection
                 const collectionRef = collection(db, collectionName);
                 const snapshot = await getDocs(collectionRef);
 
                 snapshot.forEach((doc) => {
-                    const userEmail = doc.data().email;
-                    sendEmailAlert(userEmail, `Weather Alert for ${city}`, `Threshold breached for ${condition}!`);
+                    const { email, city: userCity } = doc.data(); // Destructure city from doc data
+                    if (userCity === city) { // Send alert only if city matches
+                        sendEmailAlert(email, `Weather Alert for ${city}`, `Threshold breached for ${condition}!`);
+                    }
                 });
 
-                // Reset the alert counter after sending emails
-                alertCounters[condition] = 0;
+                setalertCounters((prevCounters) => ({
+                    ...prevCounters,
+                    [condition]: 0,
+                }));
             }
         };
 
-        // Check temperature thresholds
-        if (temp > 35) {
-            alertCounters.maxTemp++;
-        } else {
-            alertCounters.maxTemp = 0;
-        }
+        console.log(alertCounters);
 
-        if (temp < 5) {
-            alertCounters.minTemp++;
-        } else {
-            alertCounters.minTemp = 0;
-        }
+        setalertCounters((prevCounters) => {
+            const newCounters = { ...prevCounters };
 
-        // Check specific weather conditions
-        if (mainCondition === 'Rain') {
-            alertCounters.rain++;
-        } else {
-            alertCounters.rain = 0;
-        }
+            if (temp > 35) {
+                newCounters.maxTemp += 1;
+            } else {
+                newCounters.maxTemp = 0;
+            }
 
-        if (mainCondition === 'Snow') {
-            alertCounters.snow++;
-        } else {
-            alertCounters.snow = 0;
-        }
+            if (temp < 5) {
+                newCounters.minTemp += 1;
+            } else {
+                newCounters.minTemp = 0;
+            }
 
-        if (mainCondition === 'Storm') {
-            alertCounters.storm++;
-        } else {
-            alertCounters.storm = 0;
-        }
+            if (mainCondition === 'Rain') {
+                newCounters.rain += 1;
+            } else {
+                newCounters.rain = 0;
+            }
 
-        // Check and send alerts if any condition is triggered 3 times consecutively
+            if (mainCondition === 'Snow') {
+                newCounters.snow += 1;
+            } else {
+                newCounters.snow = 0;
+            }
+
+            if (mainCondition === 'Storm') {
+                newCounters.storm += 1;
+            } else {
+                newCounters.storm = 0;
+            }
+
+            return newCounters;
+        });
+
         await sendAlertsForCondition('maxTemp', 'MaxTempAlert');
         await sendAlertsForCondition('minTemp', 'MinTempAlert');
         await sendAlertsForCondition('rain', 'RainAlert');
@@ -320,12 +323,13 @@ const checkAlerts = async (weather) => {
     }
 };
 
+  
   // Send email alert (mock function)
   const sendEmailAlert = (email, subject, message) => {
-      console.log(`Sending email to ${email} with subject: ${subject} and message: ${message}`);
-      // Email sending logic would go here
+    console.log(`Sending email to ${email} with subject: ${subject} and message: ${message}`);
+    // Email sending logic would go here
   };
-
+  
 
   useEffect(() => {
     // Start fetching data on component mount and set interval
