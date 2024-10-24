@@ -120,48 +120,83 @@ function DailySummary({ city }) {
         `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${apiKey}`
       );
       const data = response.data;
-      // console.log("Fetched weather data:", data);
-
+      
+      // Extract necessary data
       const weather = {
-        temp: data.main.temp - 273.15, // Convert Kelvin to Celsius
+        temp: data.main.temp - 273.15,  // Convert Kelvin to Celsius
+        humidity: data.main.humidity,   // Extract humidity
+        windSpeed: data.wind.speed, 
         main: data.weather[0].main,
         dt: new Date(),
       };
-
-      await updateDailyAverageInFirebase(weather); // Save or update the daily average
-      await fetchDailySummaryFromFirebase(); // Fetch the updated summary from Firebase
+      
+      // console.log(weather)
+      
+      // delete all entries of previous days(since data might get accumulated over the years and is not great for free plan)
+      // run deletion every once per day by storing last updation in localstorage
+      // Save or update the daily average
+      await updateDailyAverageInFirebase(weather);
+      // Fetch the updated summary from Firebase
+      await fetchDailySummaryFromFirebase();
       
       checkAlerts(weather);
     } catch (error) {
       console.error('Error fetching weather data:', error);
     }
   };
+  
+  const deleteOldEntries = async () => {
+    try {
+      const weatherCollection = collection(db, 'DailyWeatherSummary');
+      const today = new Date();
+      const startOfToday = new Date(today.setHours(0, 0, 0, 0)); // Start of today's date
+      const todayTimestamp = Timestamp.fromDate(startOfToday);
+  
+      // Fetch all documents from the DailyWeatherSummary collection
+      const querySnapshot = await getDocs(weatherCollection);
+  
+      // Loop through all documents
+      querySnapshot.forEach(async (doc) => {
+        const data = doc.data();
+        
+        // Check if the document's date is not from today
+        if (data.date.toMillis() < todayTimestamp.toMillis()) {
+          // If it's an older entry, delete the document
+          await deleteDoc(doc.ref);
+          console.log(`Deleted document with ID: ${doc.id}`);
+        }
+      });
+  
+      console.log('Old entries deleted successfully.');
+    } catch (error) {
+      console.error('Error deleting old entries:', error);
+    }
+  };
+  
 
   // Function to update the daily average data in Firebase
   const updateDailyAverageInFirebase = async (data) => {
     try {
       const weatherCollection = collection(db, 'DailyWeatherSummary');
       const today = new Date();
-      const startOfDay = new Date(today.setHours(0, 0, 0, 0)); // Start of the current day
-
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+  
       const q = query(
         weatherCollection,
         where('city', '==', city),
-        where('date', '>=', Timestamp.fromDate(startOfDay)) // Look for today's entry
+        where('date', '>=', Timestamp.fromDate(startOfDay))
       );
       const querySnapshot = await getDocs(q);
-
+  
       let dailyDocRef;
       let dailyData;
-
+  
       if (!querySnapshot.empty) {
-        // Update existing entry for today
         querySnapshot.forEach((doc) => {
           dailyDocRef = doc.ref;
           dailyData = doc.data();
         });
       } else {
-        // Create a new entry for today
         dailyDocRef = doc(weatherCollection);
         dailyData = {
           city,
@@ -170,65 +205,76 @@ function DailySummary({ city }) {
           tempCount: 0,
           tempMin: Infinity,
           tempMax: -Infinity,
+          humiditySum: 0,
+          humidityCount: 0,
+          windSpeedSum: 0,
+          windSpeedCount: 0,
           weatherConditions: {},
         };
       }
-
-      // Update the daily data
+  
+      // Update the daily data for temperature
       dailyData.tempSum += data.temp;
       dailyData.tempCount += 1;
       dailyData.tempMin = Math.min(dailyData.tempMin, data.temp);
       dailyData.tempMax = Math.max(dailyData.tempMax, data.temp);
-
-      // Update weather conditions count
+  
+      // Update the daily data for humidity and wind speed
+      dailyData.humiditySum += data.humidity;
+      dailyData.humidityCount += 1;
+      dailyData.windSpeedSum += data.windSpeed;
+      dailyData.windSpeedCount += 1;
+  
+      // Update weather conditions
       if (dailyData.weatherConditions[data.main]) {
         dailyData.weatherConditions[data.main]++;
       } else {
         dailyData.weatherConditions[data.main] = 1;
       }
-
-      // Save the updated data to Firebase
+      // console.log(dailyData)
       await setDoc(dailyDocRef, dailyData);
-      // console.log('Daily average updated in Firebase:', dailyData);
     } catch (error) {
       console.error('Error updating daily average in Firebase:', error);
     }
   };
+  
 
   // Function to fetch the daily summary from Firebase
   const fetchDailySummaryFromFirebase = async () => {
     try {
       const today = new Date();
-      const startOfDay = new Date(today.setHours(0, 0, 0, 0)); // Start of the current day
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
       const q = query(
         collection(db, 'DailyWeatherSummary'),
         where('city', '==', city),
-        where('date', '>=', Timestamp.fromDate(startOfDay)) // Get data only from today
+        where('date', '>=', Timestamp.fromDate(startOfDay))
       );
       const querySnapshot = await getDocs(q);
-
+  
       if (!querySnapshot.empty) {
         querySnapshot.forEach((doc) => {
-          const data = doc.data();
-
+          const data = doc.data();          
           const dominantCondition = Object.keys(data.weatherConditions).reduce((a, b) =>
             data.weatherConditions[a] > data.weatherConditions[b] ? a : b
           );
-
+  
           setDailySummary({
             averageTemp: data.tempSum / data.tempCount,
             maxTemp: data.tempMax,
             minTemp: data.tempMin,
+            averageHumidity: data.humiditySum / data.humidityCount,
+            averageWindSpeed: data.windSpeedSum / data.windSpeedCount,
             dominantCondition,
           });
         });
       } else {
-        setDailySummary(null); // No data to show
+        setDailySummary(null);
       }
     } catch (error) {
       console.error('Error fetching daily summary from Firebase:', error);
     }
   };
+  
 
   // Set up an interval to fetch weather data at a user-defined interval
   const startDataFetchInterval = () => {
@@ -342,6 +388,24 @@ function DailySummary({ city }) {
       }
     };
   }, [intervalMinutes, city]);
+  
+  useEffect(() => {
+    // Function to check if it's a new day and run the cleanup
+    const runDailyCleanup = () => {
+      const lastRunDate = localStorage.getItem('lastCleanupDate');
+      const today = new Date().toDateString(); // Get today's date as a string
+
+      if (lastRunDate !== today) {
+        // Run the deleteOldEntries function since it's a new day
+        deleteOldEntries();
+
+        // Update the lastCleanupDate in localStorage
+        localStorage.setItem('lastCleanupDate', today);
+      }
+    };
+
+    runDailyCleanup();
+  }, []);
 
   return (
     <Card className="daily-summary relative p-4 shadow-lg rounded-lg">
@@ -377,15 +441,17 @@ function DailySummary({ city }) {
         {dailySummary ? (
           <div className="space-y-2">
             <p className="text-lg">
-              Average Temp: {isCelsius ? dailySummary.averageTemp.toFixed(2) : convertToFahrenheit(dailySummary.averageTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'}
+              Average Temp: {isCelsius ? dailySummary.averageTemp.toFixed(2) : convertToFahrenheit(dailySummary.averageTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'} 🌡️
             </p>
             <p className="text-lg">
-              Max Temp: {isCelsius ? dailySummary.maxTemp.toFixed(2) : convertToFahrenheit(dailySummary.maxTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'}
+              Max Temp: {isCelsius ? dailySummary.maxTemp.toFixed(2) : convertToFahrenheit(dailySummary.maxTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'} 🔥
             </p>
             <p className="text-lg">
-              Min Temp: {isCelsius ? dailySummary.minTemp.toFixed(2) : convertToFahrenheit(dailySummary.minTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'}
+              Min Temp: {isCelsius ? dailySummary.minTemp.toFixed(2) : convertToFahrenheit(dailySummary.minTemp).toFixed(2)}°{isCelsius ? 'C' : 'F'} ❄️
             </p>
-            <p className="text-lg">Dominant Condition: {dailySummary.dominantCondition}</p>
+            <p className="text-lg">Dominant Condition: {dailySummary.dominantCondition} 👑</p>
+            <p className="text-lg">Humidity: {dailySummary.averageHumidity?.toFixed(2)}% 💧</p> 
+            <p className="text-lg">Wind Speed: {dailySummary.averageWindSpeed?.toFixed(2)} m/s 🌬️</p>
           </div>
         ) : (
           <p className="text-gray-500">Loading summary...</p>

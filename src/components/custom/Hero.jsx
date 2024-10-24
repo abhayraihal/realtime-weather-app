@@ -9,7 +9,7 @@ function Hero() {
   return (
     <div className='flex flex-col mx-40 gap-5'>
       <h1 className='font-extrabold text-[50px] text-center mt-5'>
-        <span className='text-[#292929]'>RealTime Weather Monitoring</span>
+        <span className='text-[#292929]'>RealTime Weather Monitoring 🌦️📡</span>
         </h1>
       {cities.map((city, index) => (
         <DailySummary key={index} city={city} />
